@@ -2,26 +2,38 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib
+from pandas import DataFrame
 from scipy.stats import shapiro, levene, normaltest, ttest_rel, ttest_ind, wilcoxon, mannwhitneyu
 from lifelines import KaplanMeierFitter
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, roc_curve, auc
+from sklearn.model_selection import RepeatedStratifiedKFold
 
 matplotlib.use('TkAgg')
+piece_map = {
+    'p': -1, 'P': 1,
+    'n': -3, 'N': 3,
+    'b': -3, 'B': 3,
+    'r': -5, 'R': 5,
+    'q': -9, 'Q': 9,
+    'k': -100, 'K': 100,
+}
 
 
-def load_dataframe(filename):
+def load_dataframe(filename: str) -> DataFrame:
     df = pd.read_csv(filename)
     return df
 
 
-def convert_minute(minute):
+def convert_minute(minute) -> int:
     if isinstance(minute, str) and '+' in minute:
         parts = minute.split('+')
         return int(parts[0]) + int(parts[1])
     return int(minute)
 
 
-def kaplan_mayers(df):
-    df = df[['Player', 'Minute']]
+def kaplan_mayers(df: DataFrame):
+    df = df[['Player', 'Minute']].copy()
     df['Minute'] = df['Minute'].apply(convert_minute)
 
     ronaldo = df[df['Player'] == 'Cristiano Ronaldo'].sort_values(by='Minute').reset_index(drop=True)
@@ -29,7 +41,7 @@ def kaplan_mayers(df):
     return ronaldo, messi
 
 
-def print_kaplan_mayers(df1, df2):
+def print_kaplan_mayers(df1: DataFrame, df2: DataFrame):
     kmf = KaplanMeierFitter()
 
     fig, ax = plt.subplots(1, 2, figsize=(12, 6))  # 1 rząd, 2 kolumny
@@ -52,16 +64,6 @@ def print_kaplan_mayers(df1, df2):
     plt.show()
 
 
-piece_map = {
-    'p': -1, 'P': 1,
-    'n': -3, 'N': 3,
-    'b': -3, 'B': 3,
-    'r': -5, 'R': 5,
-    'q': -9, 'Q': 9,
-    'k': -100, 'K': 100,
-}
-
-
 def fen_to_matrix(fen):
     board = []
     rows = fen.split()[0].split('/')
@@ -78,8 +80,8 @@ def fen_to_matrix(fen):
     return np.array(board)
 
 
-def test_normal(df_s1, df_s2=None, col1: str = None, col2: str = None, fil: str = None,
-                dependent: bool = True, max_size_diff_ratio=0.05):
+def test_normal(df_s1: DataFrame, df_s2: DataFrame = None, col1: str = None, col2: str = None, fil: str = None,
+                dependent: bool = True, max_size_diff_ratio: float = 0.05):
     if dependent:
         df1 = df_s1[col1].dropna()
         df2 = df_s2[col1].dropna()
@@ -113,7 +115,7 @@ def test_normal(df_s1, df_s2=None, col1: str = None, col2: str = None, fil: str 
     return normal and equal_var and equal_length
 
 
-def t_student(df1, df2=None, col1: str = None, col2: str = None, dependent: bool = True, param: bool = True):
+def t_student(df1: DataFrame, df2: DataFrame = None, col1: str = None, col2: str = None, dependent: bool = True, param: bool = True):
     if df2 is None:
         df1_vals = df1[col1].dropna().reset_index(drop=True)
         df2_vals = df1[col2].dropna().reset_index(drop=True)
@@ -144,3 +146,86 @@ def t_student(df1, df2=None, col1: str = None, col2: str = None, dependent: bool
         print("Brak istotnej różnicy")
 
     return p < 0.05
+
+
+def descriptive_statistics(df: DataFrame):
+    stats = {}
+    for league, group in df.groupby("League"):
+        cols = ['H_Score', 'A_Score', 'HT_H_Score', 'HT_A_Score']
+        res = {}
+        for col in cols:
+            avg = {}
+            avg.update({f'{col}_avg': float(group[col].mean().round(2))})
+            avg.update({f'{col}_mode': group[col].mode().tolist()})
+            avg.update({f'{col}_median': float(group[col].median().round(2))})
+            avg.update({f'{col}_range': float(group[col].max().round(2) - group[col].min().round(2))})
+            avg.update({f'{col}_std': float(group[col].std().round(2))})
+            avg.update({f'{col}_variance': float(group[col].var().round(2))})
+            avg.update({f'{col}_cv': float(group[col].std().round(2) / group[col].mean().round(2))})
+            avg.update({f'{col}_0.25': float(group[col].quantile(0.25).round(0))})
+            avg.update({f'{col}_0.50': float(group[col].quantile(0.50).round(0))})
+            avg.update({f'{col}_0.75': float(group[col].quantile(0.75).round(0))})
+            res.update({col: avg})
+        stats.update({league: res})
+    return stats
+
+
+def regression(df: DataFrame):
+    df["Evaluation"] = df["Evaluation"].astype(str).str.replace(r"[+#]", "", regex=True).astype(int)
+    df["Class"] = (df["Evaluation"] >= 0).astype(int)
+    df["Matrix"] = df["FEN"].apply(fen_to_matrix)
+    df["Flattened"] = df["Matrix"].apply(lambda x: np.array(x).flatten().tolist())
+
+    X = np.vstack(df["Flattened"])
+    y = df["Class"].values
+
+    cv = RepeatedStratifiedKFold(n_splits=5, n_repeats=5)
+
+    clf = LogisticRegression(max_iter=1000)
+
+    mean_fpr = np.linspace(0, 1, 100)
+    tprs = []
+    aucs = []
+    accuracies = []
+
+    for train_idx, test_idx in cv.split(X, y):
+        X_train, X_test = X[train_idx], X[test_idx]
+        y_train, y_test = y[train_idx], y[test_idx]
+
+        clf.fit(X_train, y_train)
+        y_proba = clf.predict_proba(X_test)[:, 1]
+        y_pred = clf.predict(X_test)
+
+        acc = accuracy_score(y_test, y_pred)
+        accuracies.append(acc)
+
+        fpr, tpr, _ = roc_curve(y_test, y_proba)
+        interp_tpr = np.interp(mean_fpr, fpr, tpr)
+        interp_tpr[0] = 0.0
+        tprs.append(interp_tpr)
+        aucs.append(auc(fpr, tpr))
+    return tprs, aucs, mean_fpr, accuracies
+
+
+def roc(tprs, aucs, mean_fpr):
+    mean_tpr = np.mean(tprs, axis=0)
+    std_tpr = np.std(tprs, axis=0)
+    mean_auc = np.mean(aucs)
+    std_auc = np.std(aucs)
+
+    plt.figure(figsize=(8, 6))
+    plt.plot(mean_fpr, mean_tpr, color='blue',
+             label=f'Średnia ROC (AUC = {mean_auc:.2f} ± {std_auc:.2f})', lw=2)
+    plt.fill_between(mean_fpr,
+                     np.maximum(mean_tpr - std_tpr, 0),
+                     np.minimum(mean_tpr + std_tpr, 1),
+                     color='blue', alpha=0.2, label='±1 std')
+
+    plt.plot([0, 1], [0, 1], 'k--', lw=1)
+    plt.title('Średnia krzywa ROC (5-Fold CV)')
+    plt.xlabel('False Positive Rate')
+    plt.ylabel('True Positive Rate')
+    plt.legend(loc='lower right')
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
