@@ -2,6 +2,8 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib
+import seaborn as sns
+import scikit_posthocs as sp
 from pandas import DataFrame
 from scipy.stats import shapiro, levene, normaltest, ttest_rel, ttest_ind, wilcoxon, mannwhitneyu
 from lifelines import KaplanMeierFitter
@@ -155,16 +157,16 @@ def descriptive_statistics(df: DataFrame):
         res = {}
         for col in cols:
             avg = {}
-            avg.update({f'{col}_avg': float(group[col].mean().round(2))})
+            avg.update({f'{col}_avg': round(group[col].mean(), 2)})
             avg.update({f'{col}_mode': group[col].mode().tolist()})
-            avg.update({f'{col}_median': float(group[col].median().round(2))})
-            avg.update({f'{col}_range': float(group[col].max().round(2) - group[col].min().round(2))})
-            avg.update({f'{col}_std': float(group[col].std().round(2))})
-            avg.update({f'{col}_variance': float(group[col].var().round(2))})
-            avg.update({f'{col}_cv': float(group[col].std().round(2) / group[col].mean().round(2))})
-            avg.update({f'{col}_0.25': float(group[col].quantile(0.25).round(0))})
-            avg.update({f'{col}_0.50': float(group[col].quantile(0.50).round(0))})
-            avg.update({f'{col}_0.75': float(group[col].quantile(0.75).round(0))})
+            avg.update({f'{col}_median': round(group[col].median(), 2)})
+            avg.update({f'{col}_range': round(group[col].max() - group[col].min(), 2)})
+            avg.update({f'{col}_std': round(group[col].std(), 2)})
+            avg.update({f'{col}_variance': round(group[col].var(), 2)})
+            avg.update({f'{col}_cv': round(group[col].std() / group[col].mean(), 2)})
+            avg.update({f'{col}_0.25': round(group[col].quantile(0.25), 0)})
+            avg.update({f'{col}_0.50': round(group[col].quantile(0.50), 0)})
+            avg.update({f'{col}_0.75': round(group[col].quantile(0.75), 0)})
             res.update({col: avg})
         stats.update({league: res})
     return stats
@@ -229,3 +231,69 @@ def roc(tprs, aucs, mean_fpr):
     plt.grid(True)
     plt.tight_layout()
     plt.show()
+
+
+def draw_cd_diagram(avg_ranks, labels, cd):
+    plt.figure(figsize=(10, 2))
+    y = 0.5
+
+    for i, (rank, label) in enumerate(sorted(zip(avg_ranks, labels))):
+        plt.plot(rank, y, 'o', markersize=8, color='black')
+        plt.text(rank, y + 0.05, label, ha='center', fontsize=10, rotation=45)
+
+    max_rank = max(avg_ranks)
+    min_rank = min(avg_ranks)
+    plt.hlines(y - 0.1, min_rank, max_rank, color='lightgray')
+    plt.hlines(y - 0.2, min_rank, min_rank + cd, color='black', linewidth=2)
+    plt.vlines([min_rank, min_rank + cd], y - 0.25, y - 0.15, color='black')
+    plt.text(min_rank + cd / 2, y - 0.35, f"CD = {cd:.2f}", ha='center')
+
+    plt.title("CD Diagram")
+    plt.yticks([])
+    plt.xlabel("Średnia ranga")
+    plt.tight_layout()
+    plt.show()
+
+
+def load_and_prepare(path, year):
+    df = load_dataframe(path)
+    df = df.rename(columns={"Finishing": f"Finishing{year}"})[["ID", f"Finishing{year}"]]
+    return df
+
+
+def nemenyi_friedmann(fifa_inner):
+    finishing_data = fifa_inner[[
+        'Finishing17', 'Finishing18', 'Finishing19',
+        'Finishing20', 'Finishing21', 'Finishing22'
+    ]]
+
+    nemenyi = sp.posthoc_nemenyi_friedman(finishing_data)
+    print(nemenyi)
+
+    sns.heatmap(nemenyi, annot=True, cmap='coolwarm', fmt=".3f")
+    plt.title("Test Nemenyiego – porównanie lat FIFA")
+    plt.show()
+
+    k = 6
+    N = len(fifa_inner)
+    q_alpha = 2.850
+
+    CD = q_alpha * np.sqrt((k * (k + 1)) / (6 * N))
+    print(f"Wartość krytyczna (CD) dla testu Nemenyiego: {CD:.4f}")
+    alpha = 0.05
+    significant_pairs = []
+
+    for i in range(len(nemenyi.columns)):
+        for j in range(i + 1, len(nemenyi.columns)):
+            p_value = nemenyi.iloc[i, j]
+            if p_value < alpha:
+                year1 = nemenyi.columns[i]
+                year2 = nemenyi.columns[j]
+                significant_pairs.append((year1, year2, p_value))
+
+    print("Istotne różnice między latami (p < 0.05):")
+    for pair in significant_pairs:
+        print(f"{pair[0]} vs {pair[1]}: p = {pair[2]:.4g}")
+    avg_ranks = finishing_data.rank(axis=1, method='average', ascending=False).mean().values
+    labels = ['FIFA17', 'FIFA18', 'FIFA19', 'FIFA20', 'FIFA21', 'FIFA22']
+    draw_cd_diagram(avg_ranks, labels, CD)
