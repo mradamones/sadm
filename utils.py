@@ -8,7 +8,7 @@ from pandas import DataFrame
 from scipy.stats import shapiro, levene, normaltest, ttest_rel, ttest_ind, wilcoxon, mannwhitneyu
 from lifelines import KaplanMeierFitter
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score, roc_curve, auc
+from sklearn.metrics import accuracy_score, roc_curve, auc, precision_score, recall_score, balanced_accuracy_score
 from sklearn.model_selection import RepeatedStratifiedKFold
 
 matplotlib.use('TkAgg')
@@ -44,9 +44,9 @@ def kaplan_mayers(df: DataFrame):
 
 
 def print_kaplan_mayers(df1: DataFrame, df2: DataFrame):
-    kmf = KaplanMeierFitter()
+    kmf = KaplanMeierFitter(alpha=0.05)
 
-    fig, ax = plt.subplots(1, 2, figsize=(12, 6))  # 1 rząd, 2 kolumny
+    fig, ax = plt.subplots(1, 2, figsize=(12, 6))
 
     kmf.fit(durations=df1['Minute'], event_observed=[1] * len(df1), label='Cristiano Ronaldo')
     kmf.plot_survival_function(ax=ax[0], ci_show=True)
@@ -58,9 +58,25 @@ def print_kaplan_mayers(df1: DataFrame, df2: DataFrame):
     kmf.fit(durations=df2['Minute'], event_observed=[1] * len(df2), label='Lionel Messi')
     kmf.plot_survival_function(ax=ax[1], ci_show=True)
     ax[1].set_title("Kaplan-Meier dla Lionela Messiego")
-    ax[1].set_xlabel("Minuta")
+    ax[1].set_xlabel("Minuta meczu")
     ax[1].set_ylabel("Prawdopodobieństwo przeżycia")
     ax[1].grid(visible=True)
+
+    plt.tight_layout()
+    plt.show()
+
+
+def print_kaplan_mayers_together(df1: DataFrame, df2: DataFrame):
+    kmf = KaplanMeierFitter(alpha=0.05)
+
+    kmf.fit(durations=df1['Minute'], event_observed=[1] * len(df1), label='Cristiano Ronaldo')
+    kmf.plot_survival_function()
+    kmf.fit(durations=df2['Minute'], event_observed=[1] * len(df2), label='Lionel Messi')
+    kmf.plot_survival_function()
+    plt.title("Kaplan-Meier połączony dla dwóch zawodników  ")
+    plt.xlabel("Minuta meczu")
+    plt.ylabel("Prawdopodobieństwo przeżycia")
+    plt.grid(visible=True)
 
     plt.tight_layout()
     plt.show()
@@ -172,7 +188,7 @@ def descriptive_statistics(df: DataFrame):
     return stats
 
 
-def regression(df: DataFrame):
+def regression(df: DataFrame, threshold: float = 0.5, random_state: int = 47):
     df["Evaluation"] = df["Evaluation"].astype(str).str.replace(r"[+#]", "", regex=True).astype(int)
     df["Class"] = (df["Evaluation"] >= 0).astype(int)
     df["Matrix"] = df["FEN"].apply(fen_to_matrix)
@@ -183,12 +199,15 @@ def regression(df: DataFrame):
 
     cv = RepeatedStratifiedKFold(n_splits=5, n_repeats=5)
 
-    clf = LogisticRegression(max_iter=1000)
+    clf = LogisticRegression(max_iter=1000, random_state=random_state)
 
     mean_fpr = np.linspace(0, 1, 100)
     tprs = []
     aucs = []
     accuracies = []
+    precisions = []
+    recalls = []
+    balanced_accuracies = []
 
     for train_idx, test_idx in cv.split(X, y):
         X_train, X_test = X[train_idx], X[test_idx]
@@ -196,17 +215,23 @@ def regression(df: DataFrame):
 
         clf.fit(X_train, y_train)
         y_proba = clf.predict_proba(X_test)[:, 1]
-        y_pred = clf.predict(X_test)
+        y_pred = (y_proba >= threshold).astype(int)
 
         acc = accuracy_score(y_test, y_pred)
         accuracies.append(acc)
+        prec = precision_score(y_test, y_pred)
+        precisions.append(prec)
+        rec = recall_score(y_test, y_pred)
+        recalls.append(rec)
+        bac = balanced_accuracy_score(y_test, y_pred)
+        balanced_accuracies.append(bac)
 
         fpr, tpr, _ = roc_curve(y_test, y_proba)
         interp_tpr = np.interp(mean_fpr, fpr, tpr)
         interp_tpr[0] = 0.0
         tprs.append(interp_tpr)
         aucs.append(auc(fpr, tpr))
-    return tprs, aucs, mean_fpr, accuracies
+    return tprs, aucs, mean_fpr, accuracies, precisions, recalls, balanced_accuracies
 
 
 def roc(tprs, aucs, mean_fpr):
@@ -217,11 +242,11 @@ def roc(tprs, aucs, mean_fpr):
 
     plt.figure(figsize=(8, 6))
     plt.plot(mean_fpr, mean_tpr, color='blue',
-             label=f'Średnia ROC (AUC = {mean_auc:.2f} ± {std_auc:.2f})', lw=2)
-    plt.fill_between(mean_fpr,
-                     np.maximum(mean_tpr - std_tpr, 0),
-                     np.minimum(mean_tpr + std_tpr, 1),
-                     color='blue', alpha=0.2, label='±1 std')
+             label=f'Średnia ROC (AUC = {mean_auc:.2f})', lw=2)
+    # plt.fill_between(mean_fpr,
+    #                  np.maximum(mean_tpr - std_tpr, 0),
+    #                  np.minimum(mean_tpr + std_tpr, 1),
+    #                  color='blue', alpha=0.2, label='±1 std')
 
     plt.plot([0, 1], [0, 1], 'k--', lw=1)
     plt.title('Średnia krzywa ROC (5-Fold CV)')
