@@ -85,7 +85,7 @@ print_kaplan_mayers_together(ronaldo, messi)
 
 ### ZADANIE 6 ###
 print('==================== Regresja logistyczna ====================')
-df = load_dataframe('Y:/datasets/chess_eval/chessData.csv')
+df = load_dataframe('D:/datasets/chess_eval/chessData.csv')
 random_state = 47
 df = df.sample(n=10000, random_state=random_state)
 for thresh in [0.25, 0.75, 0.5]:
@@ -99,4 +99,5 @@ for thresh in [0.25, 0.75, 0.5]:
 
 ### ZADANIE 7 ###
 print('==================== krzywa ROC ====================')
+tprs, aucs, mean_fpr, accuracies, precisions, recalls, balanced_accuracies = regression(df, random_state=2115)
 roc(tprs, aucs, mean_fpr)
